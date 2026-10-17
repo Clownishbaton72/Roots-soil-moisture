@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROOTS – Soil Moisture Zones</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--bg:#f6f7f4;--card:#fff;--tx:#1f2a1f;--mu:#667;--bd:#d9ddd5;--ac:#2f6b3a}
+@media(prefers-color-scheme:dark){:root{--bg:#161a16;--card:#212721;--tx:#e8ede6;--mu:#9aa59a;--bd:#363e36;--ac:#6cbf7a}}
+*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:var(--bg);color:var(--tx);display:grid;grid-template-columns:1fr 440px;height:100vh}
+#map{height:100%;min-height:300px}#side{overflow:auto;padding:10px}
+@media(max-width:800px){body{grid-template-columns:1fr;grid-template-rows:55vh auto;height:auto}#map{height:55vh}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:10px}
+.card.sel{border-color:var(--ac);border-width:2px}
+h1{font-size:17px;margin:0 0 6px}h3{margin:0 0 6px;font-size:14px}
+button,input,select,textarea{font:inherit;color:inherit;background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:5px 8px}
+button{cursor:pointer}button.on,button.pri{background:var(--ac);color:#fff;border-color:var(--ac)}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:4px 0}
+label{display:flex;flex-direction:column;font-size:12px;color:var(--mu);flex:1;min-width:110px}
+.big{font-size:28px;font-weight:700}.mu{color:var(--mu);font-size:12px}
+.warn{background:#fff3cd;color:#664d03;border-radius:6px;padding:5px 8px;margin:4px 0;font-size:12px}
+.demo{background:#e0e7ff;color:#312e81;border-radius:6px;padding:5px 8px;font-size:12px;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:3px;border-bottom:1px solid var(--bd);text-align:left}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+.tag{font-size:11px;padding:1px 6px;border-radius:9px;background:var(--bd)}
+canvas{width:100%;height:130px}
+</style></head><body>
+<div id="map"></div>
+<div id="side">
+<h1>ROOTS · Soil moisture zones</h1>
+<div class="row">
+<button id="mReading" class="on">Add reading (click map)</button>
+<button id="mZone">Add 10 km zone (click map)</button>
+</div>
+<div class="row"><button id="demo">Load demo data</button><button id="expR">Export readings CSV</button><button id="expZ">Export zones CSV</button>
+<label style="flex:none">Import robot JSON<input type="file" id="imp" accept=".json"></label></div>
+<div class="mu" id="hint"></div>
+
+<div class="card"><h3>Reading</h3>
+<div class="row"><label>Zone<select id="fZone"></select></label><label>Sampling point name/ID<input id="fName"></label></div>
+<div class="row"><label>Latitude<input id="fLat" type="number" step="any"></label><label>Longitude<input id="fLng" type="number" step="any"></label></div>
+<div class="row"><label>Soil moisture %<input id="fVal" type="number" step="any"></label><label>Date &amp; time<input id="fTime" type="datetime-local"></label></div>
+<div class="row"><label>Session<input id="fSess"></label><label>Notes (optional)<input id="fNotes"></label></div>
+<div id="fMsg" class="mu"></div>
+<div class="row"><button class="pri" id="fSave">Save reading</button><button id="fNew">Clear</button></div></div>
+
+<div class="card"><h3>Filter &amp; target range</h3>
+<div class="row"><label>From<input type="date" id="qFrom"></label><label>To<input type="date" id="qTo"></label><label>Session<select id="qSess"></select></label></div>
+<div class="row"><label>Target min %<input type="number" id="cMin" step="any"></label><label>Target max %<input type="number" id="cMax" step="any"></label><label>Warn below N readings<input type="number" id="cN" min="1"></label></div>
+<div class="mu">Thresholds are yours to set: soils and sensors differ. Averages use only readings in the active filter.</div></div>
+
+<div class="card"><h3>Legend</h3>
+<div><span class="dot" style="background:#d97706"></span>Below target (too dry) <span class="dot" style="background:#16a34a"></span>Within target <span class="dot" style="background:#2563eb"></span>Above target (too wet)</div>
+<div><span class="dot" style="background:#6b7280"></span>Excluded reading / insufficient data · Circle = 10 km zone boundary</div></div>
+
+<div id="zones"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const R=10000,KEY='roots_soil_v1',$=id=>document.getElementById(id);
+let S=null;try{S=JSON.parse(localStorage.getItem(KEY))}catch(e){}
+S=S||{zones:[],readings:[],cfg:{min:20,max:40,minN:3}};
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const uid=()=>Math.random().toString(36).slice(2,9);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let mode='reading',sel=null,editId=null,F={from:'',to:'',sess:''};
+const map=L.map('map',{preferCanvas:true}).setView([30,0],2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+const layer=L.layerGroup().addTo(map);
+const zoneOf=id=>S.zones.find(z=>z.id==id);
+// True geographic (haversine) distance in metres
+const dist=(a,b)=>map.distance([a.lat,a.lng],[b.lat,b.lng]);
+const COL={dry:'#d97706',ok:'#16a34a',wet:'#2563eb',none:'#6b7280'};
+const cls=v=>v==null?'none':v<S.cfg.min?'dry':v>S.cfg.max?'wet':'ok';
+const label=v=>({none:'Insufficient data',dry:'Too dry',ok:'Within target range',wet:'Too wet'})[cls(v)];
+const fmt=v=>v==null?'No data available':(Math.round(v*10)/10)+'%';
+const fdt=t=>t?new Date(t).toLocaleString():'–';
+
+function why(r){const z=zoneOf(r.zoneId);
+ if(!z)return'No zone assigned';
+ if(r.moisture==null||!isFinite(r.moisture))return'Missing moisture value';
+ if(r.moisture<0||r.moisture>100)return'Moisture outside 0–100%';
+ if(!isFinite(r.lat)||!isFinite(r.lng))return'Missing coordinates';
+ if(isNaN(new Date(r.time)))return'Invalid date/time';
+ if(dist(r,z)>R)return'Outside the zone’s 10 km radius';return null}
+function inF(r){const t=new Date(r.time);
+ if(F.sess&&r.session!==F.sess)return false;
+ if(F.from&&t<new Date(F.from+'T00:00:00'))return false;
+ if(F.to&&t>new Date(F.to+'T23:59:59'))return false;return true}
+function stats(z){
+ const all=S.readings.filter(r=>r.zoneId==z.id&&inF(r));
+ const ok=all.filter(r=>!why(r)),bad=all.filter(r=>why(r)),v=ok.map(r=>r.moisture);
+ const avg=v.length?v.reduce((a,b)=>a+b,0)/v.length:null; // sum of valid / number of valid
+ const latest=ok.length?ok.map(r=>r.time).sort().pop():null;
+ const q=new Set(ok.map(r=>(r.lng>=z.lng?1:0)+(r.lat>=z.lat?2:0)));
+ return{ok,bad,n:ok.length,avg,min:v.length?Math.min(...v):null,max:v.length?Math.max(...v):null,latest,quads:q.size}}
+const overlaps=z=>S.zones.filter(o=>o.id!==z.id&&dist(o,z)<2*R);
+
+function render(){
+ save();layer.clearLayers();
+ const sess=[...new Set(S.readings.map(r=>r.session).filter(Boolean))].sort();
+ $('qSess').innerHTML='<option value="">All sessions</option>'+sess.map(s=>`<option ${s===F.sess?'selected':''}>${esc(s)}</option>`).join('');
+ $('fZone').innerHTML=S.zones.map(z=>`<option value="${z.id}" ${z.id==$('fZone').dataset.v?'selected':''}>${esc(z.name)}</option>`).join('')||'<option value="">(create a zone first)</option>';
+ $('cMin').value=S.cfg.min;$('cMax').value=S.cfg.max;$('cN').value=S.cfg.minN;
+ $('hint').textContent=mode==='zone'?'Click the map to place the centre of a new 10 km zone.':'Click the map to set a reading location (inside a zone).';
+ $('mZone').classList.toggle('on',mode==='zone');$('mReading').classList.toggle('on',mode==='reading');
+ let html=S.zones.some(z=>z.demo)||S.readings.some(r=>r.source==='demo')?'<div class="demo">DEMONSTRATION DATA is loaded (not real measurements). No live robot connection is implemented.</div>':'';
+ S.zones.forEach(z=>{
+  const s=stats(z),c=COL[cls(s.avg)];
+  const circ=L.circle([z.lat,z.lng],{radius:R,color:c,weight:z.id===sel?4:2,fillOpacity:.06}).addTo(layer);
+  circ.bindTooltip(`${z.name}: ${fmt(s.avg)}`,{sticky:true});
+  circ.on('click',e=>{if(mode==='zone')return;L.DomEvent.stop(e);sel=z.id;if(mode==='reading')pick(e.latlng);render()});
+  s.ok.concat(s.bad).forEach(r=>{
+   const bad=why(r),m=L.circleMarker([r.lat,r.lng],{radius:7,color:'#fff',weight:1.5,fillColor:bad?COL.none:COL[cls(r.moisture)],fillOpacity:.95}).addTo(layer);
+   const hist=S.readings.filter(x=>x.zoneId==r.zoneId&&x.name===r.name).sort((a,b)=>a.time<b.time?1:-1);
+   m.bindPopup(`<b>${esc(r.name)}</b> (${esc(z.name)})<br><b>${r.moisture==null?'n/a':r.moisture+'%'}</b>${bad?' – excluded: '+esc(bad):''}<br>${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}<br>${esc(fdt(r.time))}<br>History:<br>`+hist.map(x=>`${esc(fdt(x.time))}: ${x.moisture}%`).join('<br>'));
+   m.on('click',e=>{L.DomEvent.stop(e)});
+  });
+  const ov=overlaps(z),open=z.id===sel;
+  html+=`<div class="card ${open?'sel':''}" data-z="${z.id}"><h3>${esc(z.name)} <span class="tag">radius 10 km</span> ${z.demo?'<span class="tag">demo</span>':''}</h3>
+  <div class="big" style="color:${c}">${fmt(s.avg)}</div>
+  <div>${label(s.avg)} · target ${S.cfg.min}–${S.cfg.max}%</div>
+  <div class="mu">Average of ${s.n} recorded sample point${s.n==1?'':'s'}, not a measurement of every square metre in the zone.</div>
+  <div class="mu">Latest: ${fdt(s.latest)} · Highest ${s.max==null?'–':s.max+'%'} · Lowest ${s.min==null?'–':s.min+'%'}</div>
+  <div class="mu">Coverage: ${s.quads}/4 quadrants sampled</div>
+  ${s.n>0&&s.n<S.cfg.minN?`<div class="warn">Only ${s.n} reading(s) – treat this average with caution.</div>`:''}
+  ${s.n>0&&s.quads<3?'<div class="warn">Sampling is sparse: parts of this zone have no readings.</div>':''}
+  ${ov.length?`<div class="warn">Overlaps with ${ov.map(o=>esc(o.name)).join(', ')}. Each reading belongs to exactly one zone, so none is counted twice.</div>`:''}`;
+  if(open){
+   html+=`<div class="row"><button data-a="ren">Rename</button><button data-a="delz">Delete zone</button></div>
+   <canvas id="chart" width="400" height="130"></canvas>
+   ${s.bad.length?'<div class="mu">Excluded: '+s.bad.map(r=>esc(r.name)+' ('+esc(why(r))+')').join('; ')+'</div>':''}
+   <table><tr><th>Point</th><th>%</th><th>Time</th><th></th></tr>`+
+   S.readings.filter(r=>r.zoneId==z.id&&inF(r)).sort((a,b)=>a.time<b.time?1:-1).map(r=>`<tr><td>${esc(r.name)}${r.source!=='manual'?' <span class="tag">'+esc(r.source)+'</span>':''}</td><td>${r.moisture??'–'}</td><td>${esc(fdt(r.time))}</td><td><button data-a="ed" data-r="${r.id}">Edit</button> <button data-a="del" data-r="${r.id}">✕</button></td></tr>`).join('')+'</table>';
+  }
+  html+='</div>';
+ });
+ if(!S.zones.length)html+='<div class="card">No zones yet. Choose “Add 10 km zone”, click the map, and name it – or load demo data.</div>';
+ $('zones').innerHTML=html;drawChart();
+}
+function drawChart(){
+ const cv=$('chart');if(!cv)return;const z=zoneOf(sel),s=stats(z),x=cv.getContext('2d'),W=cv.width,H=cv.height;
+ const g={};s.ok.forEach(r=>{const k=r.time.slice(0,10);(g[k]=g[k]||[]).push(r.moisture)});
+ const pts=Object.keys(g).sort().map(k=>[new Date(k).getTime(),g[k].reduce((a,b)=>a+b,0)/g[k].length]);
+ const tx=getComputedStyle(document.body).color;x.clearRect(0,0,W,H);x.fillStyle=tx;x.strokeStyle=tx;x.font='11px sans-serif';
+ x.fillText('Daily average over time (%)',4,11);
+ if(!pts.length){x.fillText('No data available',4,60);return}
+ const lo=Math.min(0,...pts.map(p=>p[1])),hi=Math.max(S.cfg.max,...pts.map(p=>p[1]));
+ const t0=pts[0][0],t1=pts[pts.length-1][0]||t0+1,X=t=>30+(t1>t0?(t-t0)/(t1-t0):.5)*(W-45),Y=v=>H-18-(v-lo)/(hi-lo||1)*(H-36);
+ x.globalAlpha=.15;x.fillStyle='#16a34a';x.fillRect(30,Y(S.cfg.max),W-45,Y(S.cfg.min)-Y(S.cfg.max));x.globalAlpha=1;x.fillStyle=tx;
+ x.beginPath();pts.forEach((p,i)=>i?x.lineTo(X(p[0]),Y(p[1])):x.moveTo(X(p[0]),Y(p[1])));x.stroke();
+ pts.forEach(p=>{x.beginPath();x.arc(X(p[0]),Y(p[1]),3,0,7);x.fill()});
+ x.fillText(Math.round(hi),2,Y(hi)+4);x.fillText(Math.round(lo),2,Y(lo)+4);
+ x.fillText(new Date(t0).toLocaleDateString(),30,H-4);x.fillText(new Date(t1).toLocaleDateString(),W-70,H-4);
+}
+function pick(ll){
+ $('fLat').value=ll.lat.toFixed(6);$('fLng').value=ll.lng.toFixed(6);
+ const inside=S.zones.filter(z=>dist({lat:ll.lat,lng:ll.lng},z)<=R);
+ if(inside.length===1)$('fZone').value=inside[0].id;
+ else if(sel&&inside.some(z=>z.id===sel))$('fZone').value=sel;
+ $('fMsg').textContent=inside.length===0?'This point is outside every zone – it would be excluded. Pick a spot inside a circle.':inside.length>1?'Point lies in '+inside.length+' overlapping zones – choose which zone it belongs to.':'Assigned to '+inside[0].name+'.';
+ if(!$('fTime').value)now();if(!$('fSess').value)$('fSess').value=new Date().toISOString().slice(0,10);
+}
+const now=()=>{const d=new Date();d.setMinutes(d.getMinutes()-d.getTimezoneOffset());$('fTime').value=d.toISOString().slice(0,16)};
+map.on('click',e=>{
+ if(mode==='zone'){const n=prompt('Zone name (e.g. North Field, Zone A):','Zone '+String.fromCharCode(65+S.zones.length%26));
+  if(n){const z={id:uid(),name:n,lat:e.latlng.lat,lng:e.latlng.lng};S.zones.push(z);sel=z.id;mode='reading';render()}}
+ else pick(e.latlng)});
+$('mZone').onclick=()=>{mode='zone';render()};$('mReading').onclick=()=>{mode='reading';render()};
+$('fZone').onchange=e=>{e.target.dataset.v=e.target.value};
+$('fNew').onclick=()=>{editId=null;['fName','fLat','fLng','fVal','fNotes','fMsg'].forEach(i=>{$(i).value='';$(i).textContent=''});$('fSave').textContent='Save reading'};
+$('fSave').onclick=()=>{
+ if(!$('fZone').value){$('fMsg').textContent='Create a zone first.';return}
+ const v=parseFloat($('fVal').value);
+ const r={id:editId||uid(),zoneId:$('fZone').value,name:$('fName').value.trim()||'P'+(S.readings.length+1),lat:parseFloat($('fLat').value),lng:parseFloat($('fLng').value),
+  moisture:isFinite(v)?v:null,time:$('fTime').value,session:$('fSess').value.trim(),notes:$('fNotes').value,source:'manual'};
+ const w=why(r);
+ if(editId){const i=S.readings.findIndex(x=>x.id==editId);r.source=S.readings[i].source;S.readings[i]=r}else S.readings.push(r);
+ $('fMsg').textContent=w?'Saved, but excluded from averages: '+w:'Saved.';
+ const m=$('fMsg').textContent;editId=null;$('fSave').textContent='Save reading';sel=r.zoneId;render();$('fMsg').textContent=m};
+$('zones').onclick=e=>{
+ const b=e.target.closest('button'),c=e.target.closest('.card');
+ if(b){const a=b.dataset.a,z=zoneOf(sel);
+  if(a==='ren'){const n=prompt('New name',z.name);if(n)z.name=n}
+  if(a==='delz'&&confirm('Delete zone and all its readings?')){S.readings=S.readings.filter(r=>r.zoneId!=z.id);S.zones=S.zones.filter(x=>x!==z);sel=null}
+  if(a==='del')S.readings=S.readings.filter(r=>r.id!=b.dataset.r);
+  if(a==='ed'){const r=S.readings.find(r=>r.id==b.dataset.r);editId=r.id;$('fZone').value=r.zoneId;$('fName').value=r.name;$('fLat').value=r.lat;$('fLng').value=r.lng;$('fVal').value=r.moisture??'';$('fTime').value=r.time;$('fSess').value=r.session;$('fNotes').value=r.notes;$('fSave').textContent='Update reading'}
+  render();return}
+ if(c&&c.dataset.z){sel=c.dataset.z;const z=zoneOf(sel);map.fitBounds(L.circle([z.lat,z.lng],{radius:R}).getBounds());render()}};
+['qFrom','qTo','qSess'].forEach(i=>$(i).onchange=()=>{F={from:$('qFrom').value,to:$('qTo').value,sess:$('qSess').value};render()});
+['cMin','cMax','cN'].forEach(i=>$(i).onchange=()=>{const a=parseFloat($('cMin').value),b=parseFloat($('cMax').value);
+ if(isFinite(a)&&isFinite(b)&&a<=b){S.cfg.min=a;S.cfg.max=b}S.cfg.minN=Math.max(1,parseInt($('cN').value)||3);render()});
+$('demo').onclick=()=>{
+ const z={id:uid(),name:'Demo Zone A',lat:52.2053,lng:0.1218,demo:true};S.zones.push(z);sel=z.id;
+ const cosl=Math.cos(z.lat*Math.PI/180);
+ for(let i=0;i<10;i++){const a=i*0.63,rad=1500+(i%5)*1500;
+  [[0,'Demo session 1',28],[6,'Demo session 2',34]].forEach(([ago,ses,base])=>{
+   const t=new Date(Date.now()-ago*864e5);t.setMinutes(t.getMinutes()-t.getTimezoneOffset());
+   S.readings.push({id:uid(),zoneId:z.id,name:'D'+(i+1),lat:z.lat+rad*Math.sin(a)/111320,lng:z.lng+rad*Math.cos(a)/(111320*cosl),
+    moisture:Math.round((base+Math.sin(i*2+ago)*9)*10)/10,time:t.toISOString().slice(0,16),session:ses,notes:'Demo data',source:'demo'})})}
+ map.fitBounds(L.circle([z.lat,z.lng],{radius:R}).getBounds());render()};
+// Robot import (file only; no live connection). Items: {pointId, moisture, datetime, session}
+$('imp').onchange=async e=>{try{const list=JSON.parse(await e.target.files[0].text());let ok=0,skip=[];
+ list.forEach(it=>{const p=S.readings.find(r=>r.name===it.pointId);
+  if(!p){skip.push(it.pointId);return}
+  S.readings.push({id:uid(),zoneId:p.zoneId,name:p.name,lat:p.lat,lng:p.lng,moisture:it.moisture==null?null:Number(it.moisture),time:it.datetime,session:it.session||'robot import',notes:'',source:'cutebot-import'});ok++});
+ alert('Imported '+ok+' reading(s) onto predefined sampling points.'+(skip.length?' Unknown point IDs skipped: '+skip.join(', '):''));render()}catch(x){alert('Could not read that file as JSON.')}e.target.value=''};
+function csv(rows){return rows.map(r=>r.map(c=>{c=c==null?'':String(c);return /[",\n]/.test(c)?'"'+c.replace(/"/g,'""')+'"':c}).join(',')).join('\n')}
+function dl(name,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/csv'}));a.download=name;a.click()}
+$('expR').onclick=()=>dl('roots-readings.csv',csv([['zone','point','lat','lng','moisture_pct','datetime','session','notes','source','valid','exclusion_reason']].concat(S.readings.map(r=>{const w=why(r);return[zoneOf(r.zoneId)?.name,r.name,r.lat,r.lng,r.moisture,r.time,r.session,r.notes,r.source,!w,w]}))));
+$('expZ').onclick=()=>dl('roots-zone-stats.csv',csv([['zone','centre_lat','centre_lng','radius_m','average_pct','valid_readings','status','latest','min_pct','max_pct','filter']].concat(S.zones.map(z=>{const s=stats(z);return[z.name,z.lat,z.lng,R,s.avg==null?'No data available':s.avg.toFixed(2),s.n,label(s.avg),s.latest,s.min,s.max,JSON.stringify(F)]}))));
+if(S.zones.length){sel=S.zones[0].id;const z=S.zones[0];map.setView([z.lat,z.lng],9)}
+render();
+</script></body></html>

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROOTS – Is my plant happy?</title>
+<style>
+:root{--bg:#f3f6f1;--card:#fff;--tx:#1d2a1d;--mu:#667366;--bd:#d6ddd3;--ac:#2f6b3a;--dry:#d97706;--ok:#16a34a;--wet:#2563eb}
+@media(prefers-color-scheme:dark){:root{--bg:#141914;--card:#1f261f;--tx:#e8ede6;--mu:#9aa59a;--bd:#344034;--ac:#6cbf7a}}
+*{box-sizing:border-box}body{margin:0;font:16px system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;justify-content:center;padding:16px}
+main{width:100%;max-width:520px}h1{margin:4px 0 2px;font-size:26px}.sub{color:var(--mu);margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+input,select,button{font:inherit;color:inherit;width:100%;padding:11px;border:1px solid var(--bd);border-radius:10px;background:var(--card)}
+.row{display:flex;gap:10px}.row>*{flex:1}
+button.go{background:var(--ac);color:#fff;border-color:var(--ac);font-weight:600;margin-top:14px;cursor:pointer}
+.seg{display:flex;gap:6px}.seg button{width:auto;flex:1;cursor:pointer}.seg button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+#res{display:none;text-align:center}.face{font-size:52px;line-height:1}
+.verdict{font-size:24px;font-weight:700;margin:6px 0}.mu{color:var(--mu);font-size:13px}
+.bar{position:relative;height:16px;border-radius:8px;margin:22px 0 6px;overflow:hidden;display:flex}
+.bar i{display:block;height:100%}.pin{position:absolute;top:-4px;width:4px;height:24px;background:var(--tx);border-radius:2px;transform:translateX(-2px)}
+.pinwrap{position:relative}.lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--mu)}
+.hist div{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bd);font-size:14px}
+.small{font-size:12px;color:var(--mu)}
+</style></head><body><main>
+<h1>🌱 ROOTS</h1><p class="sub">Is my plant too dry, too wet, or just right?</p>
+
+<div class="card">
+<label for="plant">Which plant?</label>
+<input id="plant" list="plants" placeholder="Start typing, e.g. Monstera" autocomplete="off">
+<datalist id="plants"></datalist>
+<div id="custom" style="display:none">
+<div class="row"><div><label>Ideal min %</label><input id="cmin" type="number" value="30"></div><div><label>Ideal max %</label><input id="cmax" type="number" value="50"></div></div></div>
+<label>My moisture reading is on a…</label>
+<div class="seg"><button id="mPct" class="on">Percent (0–100)</button><button id="mDial">Meter dial (1–10)</button></div>
+<label for="val" id="vlab">Soil moisture %</label>
+<input id="val" type="number" inputmode="decimal" step="any" placeholder="e.g. 35">
+<button class="go" id="check">Check my plant</button>
+</div>
+
+<div class="card" id="res">
+<div class="face" id="face"></div><div class="verdict" id="verdict"></div><div id="detail"></div>
+<div class="pinwrap"><div class="bar" id="bar"></div><div class="pin" id="pin"></div></div>
+<div class="lbl"><span>0%</span><span id="range"></span><span>100%</span></div>
+<p id="advice" style="text-align:left"></p>
+</div>
+
+<div class="card hist" id="hcard" style="display:none"><b>Recent checks</b><div id="hist"></div>
+<button id="clr" style="margin-top:10px;width:auto;padding:6px 12px;font-size:13px">Clear history</button></div>
+
+<p class="small">Ideal ranges are general guidance for typical potting soil, not exact. Moisture sensors differ in how they read, so if a plant looks unhappy even when "just right", trust the plant and adjust. If you choose "Other plant", set the range yourself. Checks are saved only in this browser.</p>
+</main>
+<script>
+// [ideal min %, ideal max %] — general guidance, approximate
+const P={'Cactus':[5,20],'Aloe vera':[10,25],'Jade plant':[10,28],'Snake plant':[10,30],'ZZ plant':[10,30],'Lavender':[15,35],'Rosemary':[15,35],'Orchid':[25,45],
+'Rubber plant':[30,50],'Pothos':[30,50],'Monstera':[30,50],'Philodendron':[30,50],'Fiddle-leaf fig':[35,55],'Spider plant':[35,55],'African violet':[40,60],
+'Rose':[40,60],'Peppers':[45,65],'Basil':[45,65],'Strawberry':[50,70],'Tomato':[50,70],'Calathea':[50,70],'Peace lily':[45,65],'Boston fern':[55,75],'Lettuce':[55,75],'Mint':[55,75]};
+const $=id=>document.getElementById(id),OTHER='Other plant (set my own range)';
+let dial=false,hist=[];
+try{hist=JSON.parse(localStorage.getItem('roots_checks')||'[]')}catch(e){}
+$('plants').innerHTML=Object.keys(P).sort().concat(OTHER).map(n=>`<option value="${n}">`).join('');
+const norm=s=>s.trim().toLowerCase();
+const find=s=>Object.keys(P).find(k=>norm(k)===norm(s));
+$('plant').oninput=()=>{$('custom').style.display=norm($('plant').value)===norm(OTHER)?'block':'none'};
+function mode(d){dial=d;$('mDial').classList.toggle('on',d);$('mPct').classList.toggle('on',!d);
+ $('vlab').textContent=d?'Meter dial reading (1–10)':'Soil moisture %';$('val').placeholder=d?'e.g. 4':'e.g. 35'}
+$('mPct').onclick=()=>mode(false);$('mDial').onclick=()=>mode(true);
+function show(err){$('res').style.display='block';$('face').textContent='🤔';$('verdict').textContent=err;
+ $('detail').textContent='';$('advice').textContent='';$('bar').innerHTML='';$('pin').style.display='none';$('range').textContent=''}
+function check(){
+ const name=$('plant').value.trim();let lo,hi,label;
+ if(norm(name)===norm(OTHER)){lo=parseFloat($('cmin').value);hi=parseFloat($('cmax').value);label='your plant';
+  if(!isFinite(lo)||!isFinite(hi)||lo>=hi||lo<0||hi>100)return show('Set a valid range (min below max, 0–100).')}
+ else{const k=find(name);if(!k)return show('Pick a plant from the list, or choose “Other plant”.');[lo,hi]=P[k];label=k}
+ let v=parseFloat($('val').value);
+ if(!isFinite(v))return show('Enter your moisture reading first.');
+ if(dial){if(v<1||v>10)return show('Dial readings are between 1 and 10.');v=v*10}
+ else if(v<0||v>100)return show('Percent must be between 0 and 100.');
+ const st=v<lo?'dry':v>hi?'wet':'ok';
+ const T={dry:['🥀','Too dry','var(--dry)'],ok:['😊','Just right','var(--ok)'],wet:['💦','Too wet','var(--wet)']}[st];
+ $('res').style.display='block';$('face').textContent=T[0];$('verdict').textContent=T[1];$('verdict').style.color=T[2];
+ const r=x=>Math.round(x*10)/10;
+ $('detail').textContent=`${label}: your reading is ${r(v)}%. Ideal is about ${lo}–${hi}%.`+(st==='dry'?` That’s ${r(lo-v)} points below.`:st==='wet'?` That’s ${r(v-hi)} points above.`:'');
+ $('bar').innerHTML=`<i style="width:${lo}%;background:var(--dry)"></i><i style="width:${hi-lo}%;background:var(--ok)"></i><i style="width:${100-hi}%;background:var(--wet)"></i>`;
+ $('pin').style.display='block';$('pin').style.left=Math.min(100,Math.max(0,v))+'%';$('range').textContent=`ideal ${lo}–${hi}%`;
+ $('advice').textContent={dry:'Water it now: give a thorough drink until water runs out of the bottom, then check again in about an hour.',
+  ok:'Moisture is in the comfortable range. No watering needed. Check again in a few days.',
+  wet:'Hold off watering. Make sure the pot drains and empty any water in the saucer. Check again in a day or two. If leaves yellow or soil smells sour, check the roots.'}[st];
+ hist.unshift({p:label,v:r(v),s:T[1],t:new Date().toLocaleString()});hist=hist.slice(0,8);
+ try{localStorage.setItem('roots_checks',JSON.stringify(hist))}catch(e){}drawHist()}
+function drawHist(){$('hcard').style.display=hist.length?'block':'none';
+ $('hist').innerHTML=hist.map(h=>`<div><span>${h.p} · ${h.v}% · <b>${h.s}</b></span><span class="small">${h.t}</span></div>`).join('')}
+$('check').onclick=check;$('val').onkeydown=e=>{if(e.key==='Enter')check()};
+$('clr').onclick=()=>{hist=[];try{localStorage.removeItem('roots_checks')}catch(e){}drawHist()};
+drawHist();
+</script></body></html>
